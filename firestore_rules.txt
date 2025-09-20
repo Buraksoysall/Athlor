@@ -1,0 +1,51 @@
+# Firestore Güvenlik Kuralları
+# Bu kuralları Firebase Console > Firestore Database > Rules bölümüne kopyalayın
+
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Users koleksiyonu kuralları
+    match /users/{userId} {
+      // Herkes okuyabilir (profil görüntüleme için)
+      allow read: if true;
+      
+      // Kendi dokümanını yazabilir
+      allow write: if request.auth != null && request.auth.uid == userId;
+      
+      // Takip işlemleri için özel kurallar
+      allow update: if request.auth != null && (
+        // Kendi dokümanını güncelleyebilir
+        request.auth.uid == userId ||
+        // Başkasının takip listesini güncelleyebilir (sadece followers ve followerCount alanları)
+        (request.auth.uid != userId && 
+         request.writeFields.hasOnly(['followers', 'followerCount']) &&
+         request.writeFields.size() <= 2)
+      );
+    }
+    
+    // Aktiviteler koleksiyonu
+    match /activities/{activityId} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+    
+    // Sohbetler koleksiyonu
+    match /chats/{chatId} {
+      allow read, write: if request.auth != null;
+      allow create: if request.auth != null;
+    }
+    
+    // Mesajlar koleksiyonu
+    match /chats/{chatId}/messages/{messageId} {
+      allow read, write: if request.auth != null;
+      allow create: if request.auth != null;
+    }
+  }
+}
+
+# Kuralları uygulamak için:
+# 1. Firebase Console'a gidin
+# 2. Firestore Database > Rules
+# 3. Yukarıdaki kuralları kopyalayıp yapıştırın
+# 4. "Publish" butonuna tıklayın

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "426946717348",
+    "project_id": "athlor-27900",
+    "storage_bucket": "athlor-27900.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:426946717348:android:15d75f73ae52f8a83ba831",
+        "android_client_info": {
+          "package_name": "com.fitmatch.app.athlor"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBz9mS1IoHj_I0N28Futch91PnXyjYyT70"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,0 +1,57 @@
+# Firebase Storage Güvenlik Kuralları
+# Bu kuralları Firebase Console > Storage > Rules bölümüne kopyalayın
+
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Aktivite resimleri için kurallar
+    match /activity_images/{allPaths=**} {
+      // Herkes okuyabilir (public read)
+      allow read: if true;
+      
+      // Sadece authenticated kullanıcılar yazabilir
+      allow write: if request.auth != null;
+      
+      // Dosya boyutu kontrolü (5MB max)
+      allow create: if request.auth != null 
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+    
+    // Test dosyaları için kurallar
+    match /test/{allPaths=**} {
+      allow read, write: if true; // Test için herkese açık
+    }
+  }
+}
+
+# CORS Ayarları için Firebase Console'da:
+# 1. Firebase Console > Storage > Files
+# 2. Settings (⚙️) > CORS
+# 3. Aşağıdaki CORS konfigürasyonunu ekleyin:
+
+# CORS Configuration:
+[
+  {
+    "origin": ["*"],
+    "method": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    "maxAgeSeconds": 3600,
+    "responseHeader": ["Content-Type", "Authorization"]
+  }
+]
+
+# Alternatif olarak, gsutil ile CORS ayarları:
+# gsutil cors set cors.json gs://athlor-27900.firebasestorage.app
+
+# cors.json dosyası:
+{
+  "cors": [
+    {
+      "origin": ["*"],
+      "method": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+      "maxAgeSeconds": 3600,
+      "responseHeader": ["Content-Type", "Authorization"]
+    }
+  ]
+}
