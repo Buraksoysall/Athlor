@@ -1,6 +1,5 @@
 #include "Generated.xcconfig"
 
-# iOS Release Build Optimizasyonları
 ENABLE_BITCODE = NO
 SWIFT_OPTIMIZATION_LEVEL = -O
 GCC_OPTIMIZATION_LEVEL = 3
