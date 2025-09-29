@@ -7,7 +7,7 @@
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:426946717348:android:15d75f73ae52f8a83ba831",
+        "mobilesdk_app_id": "1:426946717348:android:b71a9e176303ab7d3ba831",
         "android_client_info": {
           "package_name": "com.fitmatch.app.athlor"
         }
@@ -15,7 +15,26 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyBz9mS1IoHj_I0N28Futch91PnXyjYyT70"
+          "current_key": "AIzaSyCaZMhLEdJ56YDU8MEdgNqgihnrdMD5Isw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:426946717348:android:8d7e68fe44b6be703ba831",
+        "android_client_info": {
+          "package_name": "com.mycompany.fitmatch"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCaZMhLEdJ56YDU8MEdgNqgihnrdMD5Isw"
         }
       ],
       "services": {

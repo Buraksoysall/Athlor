@@ -9,7 +9,7 @@
 	<key>PLIST_VERSION</key>
 	<string>1</string>
 	<key>BUNDLE_ID</key>
-	<string>com.athlor.app</string>
+	<string>com.example.myApp</string>
 	<key>PROJECT_ID</key>
 	<string>athlor-27900</string>
 	<key>STORAGE_BUCKET</key>
@@ -25,6 +25,6 @@
 	<key>IS_SIGNIN_ENABLED</key>
 	<true></true>
 	<key>GOOGLE_APP_ID</key>
-	<string>1:426946717348:ios:5d65698f79da5b9b3ba831</string>
+	<string>1:426946717348:ios:5ac898402f35542f3ba831</string>
 </dict>
 </plist>
