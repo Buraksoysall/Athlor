@@ -29,15 +29,19 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
     try {
       // Aylık sıfırlama gerekli mi kontrol et
       if (await _shouldResetMonthlyLikes()) {
-        print('Aylık sıfırlama yapılıyor...');
+        print('🔄 Sezon sıfırlaması yapılıyor - Yeni yarış başlıyor!');
         await _resetMonthlyLikes();
+        print('✅ Sezon sıfırlaması tamamlandı - Leaderboard güncel!');
+      } else {
+        print('✅ Sezon kontrolü tamamlandı - Sıfırlama gerekmiyor');
       }
       
       // Önce mevcut likes alanlarını güncelle
       await _updateAllUserLikes();
       
-      // Users koleksiyonundaki güncel likes verilerini kullan (REAL-TIME)
-      print('DEBUG: Real-time güncellenmiş likes verileri kullanılıyor...');
+      // Users koleksiyonundaki güncel likes verilerini kullan (SADECE BU AYIN)
+      final now = DateTime.now();
+      print('DEBUG: ${_getMonthName(now.month)} ${now.year} ayının likes verileri kullanılıyor...');
       
       // Tüm kullanıcıları çek ve aylık likes alanına göre sırala
       QuerySnapshot usersSnapshot = await FirebaseFirestore.instance
@@ -137,23 +141,50 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
     }
   }
 
-  // Tüm kullanıcıların likes alanlarını güncelle
+  // Tüm kullanıcıların likes alanlarını güncelle (Sadece bu ayın like'ları)
   Future<void> _updateAllUserLikes() async {
     try {
-      // Like koleksiyonundan tüm like'ları çek
+      final now = DateTime.now();
+      final currentYear = now.year;
+      final currentMonth = now.month;
+      
+      // Bu ayın başlangıç tarihi
+      final monthStart = DateTime(currentYear, currentMonth, 1);
+      final monthStartTimestamp = Timestamp.fromDate(monthStart);
+      
+      // Like koleksiyonundan sadece bu ayın like'larını çek (createdAt alanı ile)
       QuerySnapshot likesSnapshot = await FirebaseFirestore.instance
           .collection('likes')
+          .where('createdAt', isGreaterThanOrEqualTo: monthStartTimestamp)
           .get();
-
-      print('Toplam like sayısı: ${likesSnapshot.docs.length}');
       
-      // Activity ID'lerine göre like sayılarını say
+      print('Bu ayın like sayısı (createdAt ile): ${likesSnapshot.docs.length} (${_getMonthName(currentMonth)} ${currentYear})');
+      
+      // Activity ID'lerine göre like sayılarını say (sadece bu ayın like'ları)
       Map<String, int> activityLikeCounts = {};
+      int thisMonthLikes = 0;
       
       for (var doc in likesSnapshot.docs) {
-        String activityId = doc['activityId'];
-        activityLikeCounts[activityId] = (activityLikeCounts[activityId] ?? 0) + 1;
+        Map<String, dynamic> likeData = doc.data() as Map<String, dynamic>;
+        String activityId = likeData['activityId'];
+        
+        // createdAt kontrolü
+        if (likeData.containsKey('createdAt')) {
+          Timestamp likeTimestamp = likeData['createdAt'];
+          DateTime likeDate = likeTimestamp.toDate();
+          
+          // Bu ayın like'ı mı kontrol et
+          if (likeDate.year == currentYear && likeDate.month == currentMonth) {
+            activityLikeCounts[activityId] = (activityLikeCounts[activityId] ?? 0) + 1;
+            thisMonthLikes++;
+          }
+        } else {
+          // createdAt yoksa bu like'ı bu aya ait sayma (güvenlik için)
+          print('WARNING: Like ${doc.id} createdAt alanı yok, atlanıyor');
+        }
       }
+      
+      print('Bu ayın filtrelenmiş like sayısı: $thisMonthLikes (${_getMonthName(currentMonth)} ${currentYear})');
       
       // Tüm kullanıcıları çek
       QuerySnapshot usersSnapshot = await FirebaseFirestore.instance
@@ -189,7 +220,7 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
     }
   }
 
-  // Kullanıcının likes alanını güncelle
+  // Kullanıcının likes alanını güncelle (Sadece bu ayın like'ları)
   Future<void> _updateUserLikes(String userId, int likesCount) async {
     try {
       final now = DateTime.now();
@@ -206,27 +237,21 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
       if (userDoc.exists) {
         final userData = userDoc.data() as Map<String, dynamic>;
         final monthlyLikes = userData['monthlyLikes'] as Map<String, dynamic>? ?? {};
-        final yearlyLikes = userData['yearlyLikes'] as Map<String, int>? ?? {};
         
         // Bu ayın like sayısını güncelle
         monthlyLikes[monthKey] = likesCount;
-        
-        // Yıllık toplamı güncelle
-        final previousMonthLikes = monthlyLikes[monthKey] as int? ?? 0;
-        yearlyLikes[currentYear.toString()] = (yearlyLikes[currentYear.toString()] ?? 0) + (likesCount - previousMonthLikes);
         
         await FirebaseFirestore.instance
             .collection('users')
             .doc(userId)
             .update({
-          'likes': likesCount,
+          'likes': likesCount, // Sadece bu ayın like'ları
           'likesUpdatedAt': FieldValue.serverTimestamp(),
           'monthlyLikes': monthlyLikes,
-          'yearlyLikes': yearlyLikes,
           'currentMonthKey': monthKey,
         });
         
-        print('Kullanıcı $userId likes alanı güncellendi: $likesCount (Ay: $monthKey)');
+        print('Kullanıcı $userId bu ayın likes güncellendi: $likesCount (${_getMonthName(currentMonth)} $currentYear)');
       }
     } catch (e) {
       print('Kullanıcı $userId likes güncelleme hatası: $e');
@@ -241,15 +266,20 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
       final currentMonth = now.month;
       final currentMonthKey = '${currentYear}_${currentMonth.toString().padLeft(2, '0')}';
       
+      print('DEBUG: Sezon sıfırlaması başlıyor - $currentMonthKey');
+      
       // Tüm kullanıcıları al
       final usersSnapshot = await FirebaseFirestore.instance
           .collection('users')
           .get();
       
+      int processedUsers = 0;
+      
       for (var userDoc in usersSnapshot.docs) {
         final userId = userDoc.id;
         final userData = userDoc.data();
         final monthlyLikes = userData['monthlyLikes'] as Map<String, dynamic>? ?? {};
+        final currentLikes = userData['likes'] ?? 0;
         
         // Geçen ayın like sayısını al
         final lastMonth = currentMonth == 1 ? 12 : currentMonth - 1;
@@ -257,7 +287,7 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
         final lastMonthKey = '${lastMonthYear}_${lastMonth.toString().padLeft(2, '0')}';
         final lastMonthLikes = monthlyLikes[lastMonthKey] ?? 0;
         
-        // Bu ayın like sayısını 0'a sıfırla
+        // Mevcut likes'ı lastMonthLikes'a aktar ve likes'ı sıfırla
         monthlyLikes[currentMonthKey] = 0;
         
         await FirebaseFirestore.instance
@@ -266,42 +296,69 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
             .update({
           'likes': 0,
           'monthlyLikes': monthlyLikes,
-          'lastMonthLikes': lastMonthLikes,
+          'lastMonthLikes': currentLikes, // Mevcut likes'ı geçen aya aktar
           'currentMonthKey': currentMonthKey,
           'monthlyResetAt': FieldValue.serverTimestamp(),
         });
         
-        print('Kullanıcı $userId aylık likes sıfırlandı (Geçen ay: $lastMonthLikes)');
+        processedUsers++;
+        print('Kullanıcı $userId sezon sıfırlandı (Mevcut: $currentLikes -> lastMonth: $currentLikes, Yeni likes: 0)');
       }
+      
+      // Sistem ayarlarını güncelle - sıfırlama tamamlandı
+      await FirebaseFirestore.instance
+          .collection('system')
+          .doc('leaderboard')
+          .update({
+        'lastResetMonthKey': currentMonthKey,
+        'lastResetAt': FieldValue.serverTimestamp(),
+        'processedUsers': processedUsers,
+      });
+      
+      print('DEBUG: Sezon sıfırlaması tamamlandı - $processedUsers kullanıcı işlendi');
     } catch (e) {
       print('Aylık likes sıfırlama hatası: $e');
     }
   }
 
-  // Aylık sıfırlama gerekli mi kontrol et
+  // Aylık sıfırlama gerekli mi kontrol et (Global sistem kontrolü)
   Future<bool> _shouldResetMonthlyLikes() async {
     try {
       final now = DateTime.now();
       final currentMonthKey = '${now.year}_${now.month.toString().padLeft(2, '0')}';
       
-      // Mevcut kullanıcıdan currentMonthKey'i al
-      final currentUser = FirebaseAuth.instance.currentUser;
-      if (currentUser == null) return false;
-      
-      final userDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(currentUser.uid)
+      // Global sistem kontrolü - system/leaderboard koleksiyonunu kontrol et
+      final systemDoc = await FirebaseFirestore.instance
+          .collection('system')
+          .doc('leaderboard')
           .get();
       
-      if (userDoc.exists) {
-        final userData = userDoc.data() as Map<String, dynamic>;
-        final storedMonthKey = userData['currentMonthKey'] as String?;
+      if (systemDoc.exists) {
+        final systemData = systemDoc.data() as Map<String, dynamic>;
+        final lastResetMonthKey = systemData['lastResetMonthKey'] as String?;
         
-        // Eğer mevcut ay farklıysa sıfırlama gerekli
-        return storedMonthKey != currentMonthKey;
+        print('DEBUG: Sistem kontrol - Mevcut ay: $currentMonthKey, Son sıfırlama: $lastResetMonthKey');
+        
+        // Eğer sistem ayarlarındaki son sıfırlama ayı mevcut aydan farklıysa sıfırlama gerekli
+        bool needsReset = lastResetMonthKey != currentMonthKey;
+        
+        if (needsReset) {
+          print('DEBUG: Sezon sıfırlaması gerekli - Yeni sezon başlıyor: $currentMonthKey');
+        }
+        
+        return needsReset;
+      } else {
+        // İlk kez çalışıyorsa sistem ayarlarını oluştur
+        print('DEBUG: İlk sefer sistem ayarları oluşturuluyor');
+        await FirebaseFirestore.instance
+            .collection('system')
+            .doc('leaderboard')
+            .set({
+          'lastResetMonthKey': currentMonthKey,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+        return false;
       }
-      
-      return false;
     } catch (e) {
       print('Aylık sıfırlama kontrol hatası: $e');
       return false;
@@ -446,13 +503,57 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
                              letterSpacing: 0.0,
                            ),
                          ),
-                        const SizedBox(height: 8),
-                        Text(
-                          '${DateTime.now().year} Yılı ${_getMonthName(DateTime.now().month)} Ayı',
-                          style: GoogleFonts.inter(
-                            color: const Color(0xFFFFFFFF).withOpacity(0.7),
-                            fontSize: 14,
-                            letterSpacing: 0.0,
+                        const SizedBox(height: 12),
+                        // Sezon bilgisi ve açıklama
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [Color(0xFF007AFF), Color(0xFF0056CC)],
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                            ),
+                            borderRadius: BorderRadius.circular(12),
+                            boxShadow: [
+                              BoxShadow(
+                                color: const Color(0xFF007AFF).withOpacity(0.3),
+                                blurRadius: 8,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: Column(
+                            children: [
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(
+                                    Icons.calendar_today,
+                                    color: Colors.white,
+                                    size: 16,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    '${DateTime.now().year} Yılı ${_getMonthName(DateTime.now().month)} Sezonu',
+                                    style: GoogleFonts.inter(
+                                      color: Colors.white,
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                      letterSpacing: 0.0,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Her ay başında sıfırlanan yarış sistemi',
+                                style: GoogleFonts.inter(
+                                  color: Colors.white.withOpacity(0.8),
+                                  fontSize: 12,
+                                  letterSpacing: 0.0,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ],
