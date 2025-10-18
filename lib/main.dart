@@ -14,6 +14,10 @@ import 'add_activity_page.dart';
 import 'user_status_service.dart';
 import 'privacy_policy_page.dart';
 import 'leaderboard_page.dart';
+import 'auth_service.dart';
+import 'email_verification_page.dart';
+import 'terms_of_use_page.dart';
+import 'admin_moderation_page.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -35,6 +39,12 @@ void main() async {
     // Mobile için varsayılan konfigürasyon
     await Firebase.initializeApp();
   }
+  // Email doğrulama ve diğer şablonlar için dil ayarı (Türkçe)
+  try {
+    await FirebaseAuth.instance.setLanguageCode('tr');
+  } catch (_) {
+    // Dil ayarı başarısız olsa bile uygulama çalışmaya devam eder
+  }
   
   runApp(const MyApp());
 }
@@ -48,6 +58,9 @@ class MyApp extends StatefulWidget {
 
 class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   final UserStatusService _userStatusService = UserStatusService();
+  final AuthService _authService = AuthService();
+  // Global navigator key for navigation from auth listeners
+  static final GlobalKey<NavigatorState> _navKey = GlobalKey<NavigatorState>();
 
   @override
   void initState() {
@@ -71,6 +84,15 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   void _setupAuthStateListener() {
     FirebaseAuth.instance.authStateChanges().listen((User? user) async {
       if (user != null) {
+        // Email doğrulama kontrolü yap
+        final canLogin = await _authService.canUserLogin(user);
+        
+        if (!canLogin) {
+          // Email doğrulanmamışsa burada signOut yapma.
+          // Kullanıcı EmailVerificationPage üzerinden doğrulamayı tamamlayacak.
+          return;
+        }
+        
         // Kullanıcı giriş yaptı - gizlilik politikası kontrolü yap
         await _checkPrivacyPolicyAcceptance(user);
         _userStatusService.setUserOnline();
@@ -91,21 +113,22 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       if (userDoc.exists) {
         final data = userDoc.data();
         final privacyPolicyAccepted = data?['privacyPolicyAccepted'] ?? false;
+        final eulaAccepted = data?['eulaAccepted'] ?? false;
         
-        if (!privacyPolicyAccepted) {
-          // Gizlilik politikası kabul edilmemiş, kullanıcıyı çıkış yap
-          await FirebaseAuth.instance.signOut();
-          print('Kullanıcı gizlilik politikasını kabul etmemiş, çıkış yapıldı');
+        if (!privacyPolicyAccepted || !eulaAccepted) {
+          // Oturumu bozmadan terms sayfasına yönlendir
+          _navKey.currentState?.pushNamedAndRemoveUntil('/terms', (route) => false);
+          return;
         }
       } else {
-        // Kullanıcı belgesi yok, çıkış yap
-        await FirebaseAuth.instance.signOut();
-        print('Kullanıcı belgesi bulunamadı, çıkış yapıldı');
+        // Kullanıcı belgesi yoksa terms sayfasına yönlendir (oturumu bozma)
+        _navKey.currentState?.pushNamedAndRemoveUntil('/terms', (route) => false);
+        return;
       }
     } catch (e) {
-      print('Gizlilik politikası kontrolü hatası: $e');
-      // Hata durumunda güvenlik için çıkış yap
-      await FirebaseAuth.instance.signOut();
+      print('Gizlilik politikası ve EULA kontrolü hatası: $e');
+      // Hata durumunda oturumu bozmadan terms sayfasına yönlendir
+      _navKey.currentState?.pushNamedAndRemoveUntil('/terms', (route) => false);
     }
   }
 
@@ -118,6 +141,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.green),
         useMaterial3: true,
       ),
+      navigatorKey: _navKey,
       home: const SplashScreen(),
       routes: {
         '/home': (context) => const HomePage(),
@@ -126,6 +150,9 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         '/users': (context) => const UsersPage(),
         '/add_activity': (context) => const AddActivityPage(),
         '/leaderboard': (context) => const LeaderboardPage(),
+        '/email_verification': (context) => const EmailVerificationPage(),
+        '/terms': (context) => const TermsOfUsePage(),
+        '/admin_moderation': (context) => const AdminModerationPage(),
       },
     );
   }

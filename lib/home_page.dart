@@ -13,12 +13,66 @@ import 'comments_page.dart';
 import 'my_activities_page.dart';
 import 'leaderboard_page.dart';
 import 'unread_message_service.dart';
+import 'report_service.dart';
+import 'block_service.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
   @override
   State<HomePage> createState() => _HomePageState();
+}
+
+// Yardımcı dialog: rapor sebebi
+extension _HomePageReportDialogs on _HomePageState {
+  Future<String?> _promptReportReason() async {
+    final controller = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1C1B29),
+        title: const Text('Rapor Sebebi', style: TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: controller,
+          maxLines: 3,
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(
+            hintText: 'Kısa açıklama',
+            hintStyle: TextStyle(color: Colors.white70),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('İptal'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            child: const Text('Gönder'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<bool> _confirmBlockUser(String userName) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1C1B29),
+        title: const Text('Kullanıcıyı Engelle', style: TextStyle(color: Colors.white)),
+        content: Text(
+          'Bu kullanıcıyı ("$userName") engellemek istediğinizden emin misiniz? Bu kullanıcının içeriklerini görmeyeceksiniz ve size mesaj atamayacak.',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Vazgeç')),
+          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Engelle')),
+        ],
+      ),
+    );
+    return result == true;
+  }
 }
 
 class _HomePageState extends State<HomePage> with TickerProviderStateMixin, WidgetsBindingObserver {
@@ -35,6 +89,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin, Widg
   
   // Cache için
   List<QueryDocumentSnapshot>? _cachedActivities;
+  List<QueryDocumentSnapshot>? _filteredActivities;
   bool _isLoading = true;
   
   // Lazy loading için
@@ -48,6 +103,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin, Widg
   Map<String, int> _likeCounts = {};
   Map<String, bool> _userLikes = {};
   Map<String, List<Map<String, dynamic>>> _comments = {};
+  Map<String, int> _commentCounts = {}; // Yorum sayıları için ayrı map
   
   // Real-time like counter için
   StreamSubscription? _likesListener;
@@ -447,6 +503,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin, Widg
       _hasMoreData = true;
       _lastDocument = null;
     });
+    
+    // Filtrelenmiş aktiviteleri güncelle
+    _updateFilteredActivities();
   }
 
   // İlk veri yükleme - Lazy loading ile
@@ -462,14 +521,24 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin, Widg
           .limit(_initialLoadCount)
           .get();
       
+      // Önce temel veriyi state'e yaz ama loading'i açık tut
       setState(() {
         _cachedActivities = snapshot.docs;
-        _isLoading = false;
         _hasMoreData = snapshot.docs.length == _initialLoadCount;
         _lastDocument = snapshot.docs.isNotEmpty ? snapshot.docs.last : null;
       });
       
-      // Her aktivite için beğeni ve yorum verilerini yükle
+      // Filtrelenmiş aktiviteleri güncelle (UI hazır olsun)
+      await _updateFilteredActivities();
+      
+      // UI'ı hemen göster (loading'i kapat)
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+      
+      // Her aktivite için beğeni ve yorum verilerini arka planda yükle
       await _loadLikesAndComments();
     } catch (e) {
       setState(() {
@@ -514,6 +583,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin, Widg
         _lastDocument = snapshot.docs.last;
         _isLoadingMore = false;
       });
+      
+      // Filtrelenmiş aktiviteleri güncelle
+      await _updateFilteredActivities();
       
       // Yeni yüklenen aktiviteler için beğeni ve yorum verilerini yükle
       await _loadLikesAndCommentsForNewActivities(snapshot.docs);
@@ -651,6 +723,69 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin, Widg
         ),
       );
     }
+  }
+
+  // Silme onay dialogu
+  void _showDeleteConfirmationDialog(String activityId) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1C1B29),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          title: const Text(
+            'Aktiviteyi Sil',
+            style: TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+              fontSize: 18,
+            ),
+          ),
+          content: const Text(
+            'Bu aktiviteyi silmek istediğinizden emin misiniz? Bu işlem geri alınamaz.',
+            style: TextStyle(
+              color: Colors.white70,
+              fontSize: 14,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop(); // Dialogu kapat
+              },
+              child: const Text(
+                'İptal',
+                style: TextStyle(
+                  color: Colors.grey,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(context).pop(); // Dialogu kapat
+                _deleteActivity(activityId); // Aktiviteyi sil
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              child: const Text(
+                'Sil',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   // Aktiviteye katıl
@@ -814,41 +949,174 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin, Widg
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
     
-    // Tüm aktiviteler için beğeni sayılarını paralel olarak yükle
+    // Önce tüm yorum sayılarını toplu olarak yükle (daha hızlı)
+    await _loadAllCommentCounts();
+    
+    // Sonra beğeni verilerini yükle
     List<Future<void>> futures = [];
     
     for (final doc in _cachedActivities!) {
       final activityId = doc.id;
-      futures.add(_loadActivityLikesAndComments(activityId, user.uid));
+      futures.add(_loadActivityLikesOnly(activityId, user.uid));
     }
     
-    // Tüm beğeni ve yorum verilerini paralel olarak yükle
+    // Tüm beğeni verilerini paralel olarak yükle
     await Future.wait(futures);
     
     if (mounted) setState(() {});
   }
   
-  // Tek bir aktivite için beğeni ve yorum verilerini yükle
-  Future<void> _loadActivityLikesAndComments(String activityId, String userId) async {
+  // Tüm yorum sayılarını toplu olarak yükle
+  Future<void> _loadAllCommentCounts() async {
+    if (_cachedActivities == null) return;
+    
     try {
-      // Beğeni sayısını al
+      // Tüm aktivite ID'lerini al
+      List<String> activityIds = _cachedActivities!.map((doc) => doc.id).toList();
+      
+      if (activityIds.isEmpty) return;
+      
+      // Tüm yorumları tek sorguda al
+      final allCommentsSnapshot = await FirebaseFirestore.instance
+          .collection('comments')
+          .where('activityId', whereIn: activityIds.take(10).toList()) // Firestore'da whereIn limiti 10
+          .get();
+      
+      // Aktivite ID'ye göre yorum sayılarını grupla
+      Map<String, int> commentCounts = {};
+      for (String activityId in activityIds) {
+        commentCounts[activityId] = 0;
+      }
+      
+      for (var commentDoc in allCommentsSnapshot.docs) {
+        final data = commentDoc.data();
+        final activityId = data['activityId'] as String?;
+        if (activityId != null && commentCounts.containsKey(activityId)) {
+          commentCounts[activityId] = (commentCounts[activityId] ?? 0) + 1;
+        }
+      }
+      
+      // Eğer 10'dan fazla aktivite varsa, kalanları ayrı ayrı yükle
+      if (activityIds.length > 10) {
+        for (int i = 10; i < activityIds.length; i++) {
+          final activityId = activityIds[i];
+          final commentSnapshot = await FirebaseFirestore.instance
+              .collection('comments')
+              .where('activityId', isEqualTo: activityId)
+              .get();
+          commentCounts[activityId] = commentSnapshot.docs.length;
+        }
+      }
+      
+      // Sonuçları _commentCounts'a kaydet
+      _commentCounts.addAll(commentCounts);
+      
+      // UI'ı güncelle
+      if (mounted) setState(() {});
+      
+    } catch (e) {
+      print('Yorum sayıları yükleme hatası: $e');
+    }
+  }
+  
+  // Sadece beğeni verilerini yükle (yorum sayıları zaten yüklendi)
+  Future<void> _loadActivityLikesOnly(String activityId, String userId) async {
+    try {
+      // Bu ayın başlangıç tarihi
+      final now = DateTime.now();
+      final monthStart = DateTime(now.year, now.month, 1);
+      final monthStartTimestamp = Timestamp.fromDate(monthStart);
+      
+      // Beğeni sayısını al (sadece bu ayın like'ları)
       final likesSnapshot = await FirebaseFirestore.instance
           .collection('likes')
           .where('activityId', isEqualTo: activityId)
+          .where('createdAt', isGreaterThanOrEqualTo: monthStartTimestamp)
           .get();
       
       _likeCounts[activityId] = likesSnapshot.docs.length;
       
-      // Kullanıcının beğenip beğenmediğini kontrol et
+      // Kullanıcının beğenip beğenmediğini kontrol et (sadece bu ayın like'ları)
       final userLikeSnapshot = await FirebaseFirestore.instance
           .collection('likes')
           .where('activityId', isEqualTo: activityId)
           .where('userId', isEqualTo: userId)
+          .where('createdAt', isGreaterThanOrEqualTo: monthStartTimestamp)
           .get();
       
       _userLikes[activityId] = userLikeSnapshot.docs.isNotEmpty;
       
-      // Yorumları al
+    } catch (e) {
+      print('Beğeni yükleme hatası ($activityId): $e');
+    }
+  }
+  
+  // Tüm aktivitelerin like sayılarını yenile
+  Future<void> _refreshAllLikeCounts() async {
+    if (_cachedActivities == null) return;
+    
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    
+    // Bu ayın başlangıç tarihi
+    final now = DateTime.now();
+    final monthStart = DateTime(now.year, now.month, 1);
+    final monthStartTimestamp = Timestamp.fromDate(monthStart);
+    
+    try {
+      for (final doc in _cachedActivities!) {
+        final activityId = doc.id;
+        
+        // Her aktivite için like sayısını güncelle
+        final likesSnapshot = await FirebaseFirestore.instance
+            .collection('likes')
+            .where('activityId', isEqualTo: activityId)
+            .where('createdAt', isGreaterThanOrEqualTo: monthStartTimestamp)
+            .get();
+        
+        _likeCounts[activityId] = likesSnapshot.docs.length;
+      }
+    } catch (e) {
+      print('Like sayıları yenileme hatası: $e');
+    }
+  }
+  
+  // Tek bir aktivite için beğeni ve yorum verilerini yükle
+  Future<void> _loadActivityLikesAndComments(String activityId, String userId) async {
+    try {
+      // Bu ayın başlangıç tarihi
+      final now = DateTime.now();
+      final monthStart = DateTime(now.year, now.month, 1);
+      final monthStartTimestamp = Timestamp.fromDate(monthStart);
+      
+      // Beğeni sayısını al (sadece bu ayın like'ları)
+      final likesSnapshot = await FirebaseFirestore.instance
+          .collection('likes')
+          .where('activityId', isEqualTo: activityId)
+          .where('createdAt', isGreaterThanOrEqualTo: monthStartTimestamp)
+          .get();
+      
+      _likeCounts[activityId] = likesSnapshot.docs.length;
+      
+      // Kullanıcının beğenip beğenmediğini kontrol et (sadece bu ayın like'ları)
+      final userLikeSnapshot = await FirebaseFirestore.instance
+          .collection('likes')
+          .where('activityId', isEqualTo: activityId)
+          .where('userId', isEqualTo: userId)
+          .where('createdAt', isGreaterThanOrEqualTo: monthStartTimestamp)
+          .get();
+      
+      _userLikes[activityId] = userLikeSnapshot.docs.isNotEmpty;
+      
+      // Toplam yorum sayısını al
+      final commentCountSnapshot = await FirebaseFirestore.instance
+          .collection('comments')
+          .where('activityId', isEqualTo: activityId)
+          .get();
+      
+      _commentCounts[activityId] = commentCountSnapshot.docs.length;
+      
+      // Yorumları al (sadece ilk 10 tanesini UI için)
       final commentsSnapshot = await FirebaseFirestore.instance
           .collection('comments')
           .where('activityId', isEqualTo: activityId)
@@ -872,44 +1140,82 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin, Widg
     }
   }
 
-  // Filtrelenmiş aktiviteleri al
-  List<QueryDocumentSnapshot> _getFilteredActivities() {
-    if (_cachedActivities == null) return [];
+  // Filtrelenmiş aktiviteleri al ve state'e kaydet
+  Future<void> _updateFilteredActivities() async {
+    if (_cachedActivities == null) {
+      setState(() {
+        _filteredActivities = [];
+      });
+      return;
+    }
+    
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) {
+      setState(() {
+        _filteredActivities = [];
+      });
+      return;
+    }
+    
+    // Önce engellenen kullanıcıları filtrele
+    List<QueryDocumentSnapshot> nonBlockedActivities = [];
+    
+    for (final doc in _cachedActivities!) {
+      final activity = doc.data() as Map<String, dynamic>;
+      final createdBy = activity['createdBy'] as String?;
+      
+      if (createdBy == null || createdBy == currentUser.uid) {
+        // Kendi aktiviteleri her zaman göster
+        nonBlockedActivities.add(doc);
+      } else {
+        // Diğer kullanıcıların aktiviteleri için engel kontrolü yap
+        final isBlocked = await BlockService.isBlocked(currentUser.uid, createdBy);
+        if (!isBlocked) {
+          nonBlockedActivities.add(doc);
+        }
+      }
+    }
+    
+    List<QueryDocumentSnapshot> finalFiltered;
     
     // Eğer hiç kategori seçilmemişse veya "Tümü" seçilmişse tüm aktiviteleri döndür
     if (_selectedCategory == null && _selectedCategories.isEmpty) {
-      return _cachedActivities!;
+      finalFiltered = nonBlockedActivities;
+    } else {
+      // Seçili kategorilere göre filtrele
+      finalFiltered = nonBlockedActivities.where((doc) {
+        final activity = doc.data() as Map<String, dynamic>;
+        final activityCategory = activity['category'] as String?;
+        
+        if (activityCategory == null) return false;
+        
+        // "Tümü" seçilmişse tüm aktiviteleri göster
+        if (_selectedCategory == 'Tümü') {
+          return true;
+        }
+        
+        // Çoklu kategori seçimi varsa
+        if (_selectedCategories.isNotEmpty) {
+          return _selectedCategories.contains(activityCategory);
+        }
+        
+        // Tek kategori seçimi varsa
+        if (_selectedCategory != null) {
+          return activityCategory == _selectedCategory;
+        }
+        
+        return false;
+      }).toList();
     }
     
-    // Seçili kategorilere göre filtrele
-    return _cachedActivities!.where((doc) {
-      final activity = doc.data() as Map<String, dynamic>;
-      final activityCategory = activity['category'] as String?;
-      
-      if (activityCategory == null) return false;
-      
-      // "Tümü" seçilmişse tüm aktiviteleri göster
-      if (_selectedCategory == 'Tümü') {
-        return true;
-      }
-      
-      // Çoklu kategori seçimi varsa
-      if (_selectedCategories.isNotEmpty) {
-        return _selectedCategories.contains(activityCategory);
-      }
-      
-      // Tek kategori seçimi varsa
-      if (_selectedCategory != null) {
-        return activityCategory == _selectedCategory;
-      }
-      
-      return false;
-    }).toList();
+    setState(() {
+      _filteredActivities = finalFiltered;
+    });
   }
 
   // Lazy loading için daha fazla veri yükleme kontrolü
   bool _shouldLoadMore(int currentIndex) {
-    final filteredActivities = _getFilteredActivities();
+    final filteredActivities = _filteredActivities ?? [];
     return currentIndex >= filteredActivities.length - 3 && 
            _hasMoreData && 
            !_isLoadingMore &&
@@ -1008,6 +1314,10 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin, Widg
       
       // Beğeni sayısını güncelle
       await _loadActivityLikesAndComments(activityId, user.uid);
+      
+      // Tüm aktivitelerin like sayılarını yenile (real-time senkronizasyon için)
+      await _refreshAllLikeCounts();
+      
       if (mounted) setState(() {});
       
     } catch (e) {
@@ -1025,6 +1335,15 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin, Widg
   // Belirli bir aktivite için yorumları yükle
   Future<void> _loadCommentsForActivity(String activityId) async {
     try {
+      // Toplam yorum sayısını al
+      final commentCountSnapshot = await FirebaseFirestore.instance
+          .collection('comments')
+          .where('activityId', isEqualTo: activityId)
+          .get();
+      
+      _commentCounts[activityId] = commentCountSnapshot.docs.length;
+      
+      // Yorumları al (sadece ilk 10 tanesini UI için)
       final commentsSnapshot = await FirebaseFirestore.instance
           .collection('comments')
           .where('activityId', isEqualTo: activityId)
@@ -1805,7 +2124,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin, Widg
                     else
                       // Aktivite sahibi için silme butonu
                       GestureDetector(
-                        onTap: () => _deleteActivity(activityId),
+                        onTap: () => _showDeleteConfirmationDialog(activityId),
                         child: Container(
                           width: 40,
                           height: 40,
@@ -1820,6 +2139,96 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin, Widg
                           ),
                         ),
                       ),
+                    const SizedBox(width: 8),
+                    // Rapor Et menüsü (herkes için görünür)
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: PopupMenuButton<String>(
+                        icon: const Icon(Icons.more_vert, color: Colors.white),
+                        onSelected: (value) async {
+                          if (value == 'report') {
+                            final current = FirebaseAuth.instance.currentUser;
+                            if (current == null) return;
+                            final reason = await _promptReportReason();
+                            if (reason == null || reason.isEmpty) return;
+                            await ReportService.reportContent(
+                              reporterId: current.uid,
+                              contentId: activityId,
+                              contentType: 'activity',
+                              reason: reason,
+                              metadata: {
+                                'createdBy': activity['createdBy'] ?? '',
+                                'title': activity['title'] ?? '',
+                              },
+                            );
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Rapor gönderildi'), backgroundColor: Colors.orange),
+                              );
+                            }
+                          } else if (value == 'block_user') {
+                            final current = FirebaseAuth.instance.currentUser;
+                            if (current == null) return;
+                            final targetUserId = activity['createdBy'] as String? ?? '';
+                            final targetUserName = activity['createdByName'] as String? ?? 'Kullanıcı';
+                            if (targetUserId.isEmpty) return;
+
+                            final confirmed = await _confirmBlockUser(targetUserName);
+                            if (!confirmed) return;
+
+                            try {
+                              await FirebaseFirestore.instance
+                                  .collection('users')
+                                  .doc(current.uid)
+                                  .collection('blocked')
+                                  .doc(targetUserId)
+                                  .set({
+                                'blockedUserId': targetUserId,
+                                'reason': 'user_block_from_home',
+                                'createdAt': FieldValue.serverTimestamp(),
+                              }, SetOptions(merge: true));
+
+                              // Feed'den bu kullanıcının içeriklerini kaldır
+                              if (_cachedActivities != null) {
+                                setState(() {
+                                  _cachedActivities = _cachedActivities!
+                                      .where((doc) {
+                                        final data = doc.data() as Map<String, dynamic>;
+                                        return (data['createdBy'] as String? ?? '') != targetUserId;
+                                      })
+                                      .toList();
+                                });
+                              }
+
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('Kullanıcı engellendi: $targetUserName'),
+                                    backgroundColor: Colors.red,
+                                  ),
+                                );
+                              }
+                            } catch (e) {
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('Engelleme hatası: $e'),
+                                    backgroundColor: Colors.red,
+                                  ),
+                                );
+                              }
+                            }
+                          }
+                        },
+                        itemBuilder: (context) => const [
+                          PopupMenuItem(value: 'report', child: Text('Rapor Et')),
+                          PopupMenuItem(value: 'block_user', child: Text('Kullanıcıyı Engelle')),
+                        ],
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -2012,7 +2421,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin, Widg
                         const SizedBox(width: 20),
                         _buildFullScreenInteractionButton(
                           icon: Icons.chat_bubble_outline,
-                          label: '${_comments[activityId]?.length ?? 0}',
+                          label: '${_commentCounts[activityId] ?? 0}',
                           color: Colors.white,
                           onTap: () => _openCommentsPage(activity, activityId),
                         ),
@@ -2204,7 +2613,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin, Widg
                         ],
                       ),
                     )
-                  : _getFilteredActivities().isEmpty
+                  : (_filteredActivities ?? []).isEmpty
                       ? Center(
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
@@ -2247,7 +2656,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin, Widg
                           ),
                         )
                       : PageView.builder(
-                          itemCount: _getFilteredActivities().length + (_isLoadingMore ? 1 : 0),
+                          itemCount: (_filteredActivities ?? []).length + (_isLoadingMore ? 1 : 0),
                           onPageChanged: (index) {
                             // Son 3 aktiviteye yaklaştığında daha fazla yükle
                             if (_shouldLoadMore(index)) {
@@ -2256,11 +2665,11 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin, Widg
                           },
                           itemBuilder: (context, index) {
                             // Loading indicator göster
-                            if (index == _getFilteredActivities().length && _isLoadingMore) {
+                            if (index == (_filteredActivities ?? []).length && _isLoadingMore) {
                               return _buildLoadingCard();
                             }
                             
-                            final doc = _getFilteredActivities()[index];
+                            final doc = (_filteredActivities ?? [])[index];
                             final activity = doc.data() as Map<String, dynamic>;
                             activity['id'] = doc.id;
                             final createdAt = (activity['createdAt'] as Timestamp).toDate();

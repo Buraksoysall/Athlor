@@ -5,6 +5,7 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'content_moderation_service.dart';
 
 class AddActivityPage extends StatefulWidget {
   const AddActivityPage({super.key});
@@ -285,6 +286,26 @@ class _AddActivityPageState extends State<AddActivityPage> {
         return;
       }
 
+      // Content filtering for title/description
+      final title = _titleController.text.trim();
+      final description = _descriptionController.text.trim();
+      if (ContentModerationService.isObjectionable(title) ||
+          (description.isNotEmpty && ContentModerationService.isObjectionable(description))) {
+        await ContentModerationService.logBlockedSubmission(
+          userId: user.uid,
+          contentType: 'activity',
+          content: '$title\n$description',
+        );
+        final kw = ContentModerationService.findFirstMatch('$title\n$description');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Uygunsuz içerik tespit edildi${kw != null ? ' ("$kw")' : ''}. Aktivite oluşturulamadı.'),
+            backgroundColor: const Color(0xFFFF3B30),
+          ),
+        );
+        return;
+      }
+
       // Tarih ve saati belirle
       DateTime activityDateTime;
       if (_showInviteForm && _selectedDate != null) {
@@ -355,8 +376,8 @@ class _AddActivityPageState extends State<AddActivityPage> {
           : 20;
       
       final activityData = {
-        'title': _titleController.text.trim(),
-        'description': _descriptionController.text.trim(),
+        'title': title,
+        'description': description,
         'category': _selectedCategory,
         'categoryTag': _selectedCategory!.toLowerCase().replaceAll(' ', '_'),
         'dateTime': activityDateTime,

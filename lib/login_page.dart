@@ -3,6 +3,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:ui';
 import 'main.dart';
 import 'home_page.dart';
+import 'auth_service.dart';
+import 'email_verification_page.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -15,6 +17,7 @@ class _LoginPageState extends State<LoginPage> {
   final _formKey = GlobalKey<FormState>();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  final AuthService _authService = AuthService();
   
   bool _passwordVisibility = false;
   bool _isLoading = false;
@@ -34,16 +37,15 @@ class _LoginPageState extends State<LoginPage> {
       });
 
       try {
-        // Firebase Auth ile giriş yap
-        final userCredential = await FirebaseAuth.instance.signInWithEmailAndPassword(
+        // AuthService ile giriş yap (email doğrulama kontrolü dahil)
+        final userCredential = await _authService.signInWithEmailAndPassword(
           email: _emailController.text.trim(),
           password: _passwordController.text,
         );
-        
-        // Kullanıcı bilgilerini kontrol et
-        if (userCredential.user != null) {
-          print('Giriş başarılı: ${userCredential.user!.email}');
-        }
+        // Auth state kesinleşene kadar bekle (permission-denied hatalarını önler)
+        try {
+          await FirebaseAuth.instance.idTokenChanges().firstWhere((u) => u != null);
+        } catch (_) {}
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -69,7 +71,25 @@ class _LoginPageState extends State<LoginPage> {
       } on FirebaseAuthException catch (e) {
         String errorMessage = 'Bir hata oluştu';
         
-        if (e.code == 'user-not-found') {
+        if (e.code == 'email-not-verified') {
+          // Email doğrulanmamış - doğrulama sayfasına yönlendir
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('E-posta adresinizi doğrulamanız gerekiyor.'),
+                backgroundColor: Colors.orange,
+              ),
+            );
+            
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const EmailVerificationPage(),
+              ),
+            );
+          }
+          return;
+        } else if (e.code == 'user-not-found') {
           errorMessage = 'Bu e-posta adresi ile kayıtlı kullanıcı bulunamadı';
         } else if (e.code == 'wrong-password') {
           errorMessage = 'Hatalı şifre';

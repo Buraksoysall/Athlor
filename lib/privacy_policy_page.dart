@@ -3,6 +3,10 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'interest_selection_page.dart';
+import 'auth_service.dart';
+import 'email_verification_page.dart';
+import 'login_page.dart';
+import 'terms_of_use_page.dart';
 
 class PrivacyPolicyPage extends StatefulWidget {
   final Map<String, String>? registrationData;
@@ -16,6 +20,7 @@ class PrivacyPolicyPage extends StatefulWidget {
 class _PrivacyPolicyPageState extends State<PrivacyPolicyPage> {
   bool _isAccepted = false;
   bool _isLoading = false;
+  final AuthService _authService = AuthService();
 
   @override
   Widget build(BuildContext context) {
@@ -291,18 +296,28 @@ class _PrivacyPolicyPageState extends State<PrivacyPolicyPage> {
       // Eğer kayıt verisi varsa, önce Firebase Auth ile kayıt yap
       if (widget.registrationData != null) {
         await _createUserAccount();
+        
+        // Kayıt sonrası EULA (Kullanım Şartları) sayfasına yönlendir
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => const TermsOfUsePage(),
+            ),
+          );
+        }
       } else {
         // Mevcut kullanıcı için gizlilik politikası kabulünü güncelle
         await _updateExistingUserPrivacyPolicy();
-      }
-
-      if (mounted) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (context) => const InterestSelectionPage(),
-          ),
-        );
+        
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => const InterestSelectionPage(),
+            ),
+          );
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -326,102 +341,74 @@ class _PrivacyPolicyPageState extends State<PrivacyPolicyPage> {
     final data = widget.registrationData!;
     
     try {
-      // Firebase Auth ile kullanıcı oluştur
-      final UserCredential userCredential = await FirebaseAuth.instance
-          .createUserWithEmailAndPassword(
+      // AuthService kullanarak kayıt ol (email doğrulama maili otomatik gönderilir)
+      final UserCredential userCredential = await _authService.registerWithEmailAndPassword(
         email: data['email']!,
         password: data['password']!,
+        name: data['name']!,
+        username: data['username']!,
       );
-
-      // Firestore'a kullanıcı bilgilerini kaydet
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(userCredential.user!.uid)
-          .set({
-        'uid': userCredential.user!.uid,
-        'userId': userCredential.user!.uid,
-        'displayName': data['name']!,
-        'username': data['username']!,
-        'email': data['email']!,
-        'privacyPolicyAccepted': true,
-        'privacyPolicyAcceptedAt': FieldValue.serverTimestamp(),
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-
-      // Kullanıcı profilini güncelle
-      await userCredential.user!.updateDisplayName(data['name']!);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Kayıt başarılı! Hoş geldiniz!'),
+            content: Text('Kayıt başarılı! E-posta doğrulama linki gönderildi.'),
             backgroundColor: Colors.green,
           ),
         );
       }
     } on FirebaseAuthException catch (e) {
       String errorMessage = 'Bir hata oluştu';
-      
-      if (e.code == 'weak-password') {
-        errorMessage = 'Şifre çok zayıf';
-      } else if (e.code == 'email-already-in-use') {
-        errorMessage = 'Bu e-posta adresi zaten kullanılıyor';
+      if (e.code == 'email-already-in-use') {
+        errorMessage = 'Bu e-posta adresi zaten kullanılıyor. Lütfen giriş yapın.';
       } else if (e.code == 'invalid-email') {
-        errorMessage = 'Geçersiz e-posta adresi';
+        errorMessage = 'Geçersiz e-posta adresi.';
+      } else if (e.code == 'weak-password') {
+        errorMessage = 'Şifre çok zayıf. Lütfen daha güçlü bir şifre belirleyin.';
+      } else if (e.message != null && e.message!.isNotEmpty) {
+        errorMessage = e.message!;
       }
-      
-      throw Exception(errorMessage);
-    } catch (e) {
-      // Tüm Pigeon hatalarını yakala
-      print('Hata yakalandı: $e');
-      print('Hata tipi: ${e.runtimeType}');
-      
-      // PigeonUserDetails, PigeonUserInfo ve type casting hatalarını yakala
-      if (e.toString().contains('PigeonUserDetails') || 
-          e.toString().contains('PigeonUserInfo') ||
-          e.toString().contains('List<Object?>') ||
-          e.toString().contains('type cast') ||
-          e.toString().contains('Pigeon') ||
-          e.runtimeType.toString().contains('Pigeon')) {
-        print('Pigeon hatası yakalandı, kayıt başarılı sayılıyor');
-        
-        // Kullanıcı belgesini oluştur
-        final user = FirebaseAuth.instance.currentUser;
-        if (user != null) {
-          try {
-            await FirebaseFirestore.instance
-                .collection('users')
-                .doc(user.uid)
-                .set({
-              'uid': user.uid,
-              'userId': user.uid,
-              'displayName': data['name']!,
-              'username': data['username']!,
-              'email': data['email']!,
-              'privacyPolicyAccepted': true,
-              'privacyPolicyAcceptedAt': FieldValue.serverTimestamp(),
-              'createdAt': FieldValue.serverTimestamp(),
-            });
-            
-            await user.updateDisplayName(data['name']!);
-          } catch (firestoreError) {
-            print('Firestore hatası: $firestoreError');
-          }
-        }
-        
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Kayıt başarılı! Hoş geldiniz!'),
-              backgroundColor: Colors.green,
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(errorMessage),
+            backgroundColor: Colors.red,
+          ),
+        );
+
+        // Eğer e-posta zaten kullanılıyorsa, kullanıcıya Login'e gitme seçeneği sun
+        if (e.code == 'email-already-in-use') {
+          final goLogin = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('E-posta Kullanımda'),
+              content: const Text('Bu e-posta ile daha önce bir hesap oluşturulmuş. Giriş yapmaya gitmek ister misiniz?'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('İptal'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(true),
+                  child: const Text('Giriş Yap'),
+                ),
+              ],
             ),
           );
+
+          if (goLogin == true && mounted) {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const LoginPage(),
+              ),
+            );
+          }
         }
-      } else {
-        // Diğer hatalar için detaylı mesaj
-        print('Beklenmeyen hata: $e');
-        throw e;
       }
+
+      throw Exception(errorMessage);
     }
   }
 

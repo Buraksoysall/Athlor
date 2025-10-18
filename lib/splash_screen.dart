@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'home_page.dart';
 import 'login_page.dart';
+import 'auth_service.dart';
+import 'email_verification_page.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'terms_of_use_page.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -18,6 +22,7 @@ class _SplashScreenState extends State<SplashScreen>
   late Animation<double> _logoOpacityAnimation;
   late Animation<double> _textOpacityAnimation;
   late Animation<Offset> _textSlideAnimation;
+  final AuthService _authService = AuthService();
 
   @override
   void initState() {
@@ -95,11 +100,35 @@ class _SplashScreenState extends State<SplashScreen>
       print('Splash Screen - Kullanıcı durumu: ${user?.uid ?? "Giriş yapmamış"}');
       
       if (user != null) {
-        // Kullanıcı giriş yapmış, ana sayfaya git
-        print('Ana sayfaya yönlendiriliyor...');
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (context) => const HomePage()),
-        );
+        // Email doğrulama kontrolü yap
+        final canLogin = await _authService.canUserLogin(user);
+        
+        if (canLogin) {
+          // EULA kontrolü
+          final userDoc = await FirebaseFirestore.instance
+              .collection('users')
+              .doc(user.uid)
+              .get();
+          final eulaAccepted = userDoc.data()?['eulaAccepted'] == true;
+          if (!eulaAccepted) {
+            print('EULA kabul edilmemiş, TermsOfUsePage\'e yönlendiriliyor...');
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute(builder: (context) => const TermsOfUsePage()),
+            );
+          } else {
+            // Kullanıcı giriş yapabilir, ana sayfaya git
+            print('Ana sayfaya yönlendiriliyor...');
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute(builder: (context) => const HomePage()),
+            );
+          }
+        } else {
+          // Email doğrulanmamış, doğrulama sayfasına git
+          print('Email doğrulama sayfasına yönlendiriliyor...');
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (context) => const EmailVerificationPage()),
+          );
+        }
       } else {
         // Kullanıcı giriş yapmamış, login sayfasına git
         print('Login sayfasına yönlendiriliyor...');

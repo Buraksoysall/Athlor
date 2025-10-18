@@ -6,6 +6,7 @@ import 'users_page.dart';
 import 'chat_page.dart';
 import 'user_status_service.dart';
 import 'unread_message_service.dart';
+import 'block_service.dart';
 
 class MessagePage extends StatefulWidget {
   final Function(String)? onChatOpened;
@@ -39,6 +40,39 @@ class _MessagePageState extends State<MessagePage> {
       print('Profil fotoğrafı alınırken hata: $e');
       return null;
     }
+  }
+
+  // Engellenen kullanıcıları filtrele
+  Future<List<Map<String, dynamic>>> _getFilteredChats(List<QueryDocumentSnapshot> chatDocs) async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return [];
+    
+    List<Map<String, dynamic>> filteredChats = [];
+    
+    for (final doc in chatDocs) {
+      final chat = doc.data() as Map<String, dynamic>;
+      final participants = List<String>.from(chat['participants'] ?? []);
+      final currentUserId = currentUser.uid;
+      
+      // Diğer kullanıcının ID'sini bul
+      final otherUserIndex = participants.indexOf(currentUserId) == 0 ? 1 : 0;
+      final otherUserId = participants.length > otherUserIndex 
+          ? participants[otherUserIndex] 
+          : '';
+      
+      if (otherUserId.isNotEmpty) {
+        // Engel kontrolü yap
+        final isBlocked = await BlockService.isBlocked(currentUserId, otherUserId);
+        if (!isBlocked) {
+          filteredChats.add({
+            'chat': chat,
+            'chatId': doc.id,
+          });
+        }
+      }
+    }
+    
+    return filteredChats;
   }
 
   // Kullanıcı adını al
@@ -214,252 +248,309 @@ class _MessagePageState extends State<MessagePage> {
             );
           }
 
-          return ListView.builder(
-            padding: const EdgeInsets.all(16),
-            itemCount: snapshot.data!.docs.length,
-            itemBuilder: (context, index) {
-              final chat = snapshot.data!.docs[index].data() as Map<String, dynamic>;
-              final participants = List<String>.from(chat['participants'] ?? []);
-              final participantNames = List<String>.from(chat['participantNames'] ?? []);
-              final currentUser = FirebaseAuth.instance.currentUser;
-              
-                             // Diğer kullanıcının bilgilerini bul
-               final currentUserId = currentUser?.uid ?? '';
-               final otherUserIndex = participants.indexOf(currentUserId) == 0 ? 1 : 0;
-              final otherUserName = participantNames.length > otherUserIndex 
-                  ? participantNames[otherUserIndex] 
-                  : 'Kullanıcı';
-              final otherUserId = participants.length > otherUserIndex 
-                  ? participants[otherUserIndex] 
-                  : '';
-              final lastMessage = chat['lastMessage'] ?? '';
-              final lastMessageTime = chat['lastMessageTime'] as Timestamp?;
-              final chatId = snapshot.data!.docs[index].id;
-              
-              return Container(
-                margin: const EdgeInsets.only(bottom: 12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1C1B29),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: const Color(0xFF8A2BE2).withOpacity(0.2),
-                    width: 1,
+          return FutureBuilder<List<Map<String, dynamic>>>(
+            future: _getFilteredChats(snapshot.data!.docs),
+            builder: (context, filteredSnapshot) {
+              if (filteredSnapshot.connectionState == ConnectionState.waiting) {
+                return const Center(
+                  child: CircularProgressIndicator(
+                    valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF8A2BE2)),
                   ),
-                  boxShadow: [
-                    BoxShadow(
-                      blurRadius: 8,
-                      color: const Color(0xFF8A2BE2).withOpacity(0.1),
-                      offset: const Offset(0, 2),
-                    ),
-                    BoxShadow(
-                      blurRadius: 4,
-                      color: Colors.black.withOpacity(0.3),
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: ListTile(
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 8,
-                  ),
-                  leading: Stack(
+                );
+              }
+
+              final filteredChats = filteredSnapshot.data ?? [];
+
+              // Son etkinliğe (lastMessageTime > createdAt) göre sıralama: en yeni üste
+              final sortedChats = [...filteredChats];
+              sortedChats.sort((a, b) {
+                final Map<String, dynamic> aChat = a['chat'] as Map<String, dynamic>;
+                final Map<String, dynamic> bChat = b['chat'] as Map<String, dynamic>;
+
+                final Timestamp? aTs = (aChat['lastMessageTime'] ?? aChat['createdAt']) as Timestamp?;
+                final Timestamp? bTs = (bChat['lastMessageTime'] ?? bChat['createdAt']) as Timestamp?;
+
+                final DateTime aTime = aTs?.toDate() ?? DateTime.fromMillisecondsSinceEpoch(0);
+                final DateTime bTime = bTs?.toDate() ?? DateTime.fromMillisecondsSinceEpoch(0);
+
+                return bTime.compareTo(aTime); // Descending
+              });
+
+              if (filteredChats.isEmpty) {
+                return Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      FutureBuilder<String?>(
-                        future: _getUserProfileImage(otherUserId),
-                        builder: (context, snapshot) {
-                          final profileImageUrl = snapshot.data;
-                          
-                          return Container(
-                            width: 48,
-                            height: 48,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF8A2BE2).withOpacity(0.2),
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: const Color(0xFF8A2BE2).withOpacity(0.3),
-                                width: 1,
-                              ),
-                            ),
-                            child: ClipOval(
-                              child: profileImageUrl != null
-                                  ? Image.network(
-                                      profileImageUrl,
-                                      width: 48,
-                                      height: 48,
-                                      fit: BoxFit.cover,
-                                      loadingBuilder: (context, child, loadingProgress) {
-                                        if (loadingProgress == null) return child;
-                                        return Container(
+                      Icon(
+                        Icons.chat_bubble_outline,
+                        size: 64,
+                        color: const Color(0xFF8A2BE2).withOpacity(0.6),
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        'Henüz sohbet yok',
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFFFFFFFF),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Sağ üstteki + butonuna tıklayarak\nkullanıcı bulabilirsin!',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: const Color(0xFFFFFFFF).withOpacity(0.7),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }
+
+              return ListView.builder(
+                padding: const EdgeInsets.all(16),
+                itemCount: sortedChats.length,
+                itemBuilder: (context, index) {
+                  final chatData = sortedChats[index];
+                  final chat = chatData['chat'] as Map<String, dynamic>;
+                  final chatId = chatData['chatId'] as String;
+                  final participants = List<String>.from(chat['participants'] ?? []);
+                  final participantNames = List<String>.from(chat['participantNames'] ?? []);
+                  final currentUser = FirebaseAuth.instance.currentUser;
+
+                  final currentUserId = currentUser?.uid ?? '';
+                  final otherUserIndex = participants.indexOf(currentUserId) == 0 ? 1 : 0;
+                  final otherUserName = participantNames.length > otherUserIndex
+                      ? participantNames[otherUserIndex]
+                      : 'Kullanıcı';
+                  final otherUserId = participants.length > otherUserIndex
+                      ? participants[otherUserIndex]
+                      : '';
+                  final lastMessage = chat['lastMessage'] ?? '';
+                  final lastMessageTime = chat['lastMessageTime'] as Timestamp?;
+
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1C1B29),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: const Color(0xFF8A2BE2).withOpacity(0.2),
+                        width: 1,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          blurRadius: 8,
+                          color: const Color(0xFF8A2BE2).withOpacity(0.1),
+                          offset: const Offset(0, 2),
+                        ),
+                        BoxShadow(
+                          blurRadius: 4,
+                          color: Colors.black.withOpacity(0.3),
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: ListTile(
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
+                      leading: Stack(
+                        children: [
+                          FutureBuilder<String?>(
+                            future: _getUserProfileImage(otherUserId),
+                            builder: (context, snapshot) {
+                              final profileImageUrl = snapshot.data;
+
+                              return Container(
+                                width: 48,
+                                height: 48,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF8A2BE2).withOpacity(0.2),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: const Color(0xFF8A2BE2).withOpacity(0.3),
+                                    width: 1,
+                                  ),
+                                ),
+                                child: ClipOval(
+                                  child: profileImageUrl != null
+                                      ? Image.network(
+                                          profileImageUrl,
                                           width: 48,
                                           height: 48,
-                                          color: const Color(0xFF8A2BE2).withOpacity(0.2),
-                                          child: const Center(
-                                            child: CircularProgressIndicator(
-                                              strokeWidth: 2,
-                                              color: const Color(0xFF8A2BE2),
-                                            ),
-                                          ),
-                                        );
-                                      },
-                                      errorBuilder: (context, error, stackTrace) {
-                                        return Center(
+                                          fit: BoxFit.cover,
+                                          loadingBuilder: (context, child, loadingProgress) {
+                                            if (loadingProgress == null) return child;
+                                            return Container(
+                                              width: 48,
+                                              height: 48,
+                                              color: const Color(0xFF8A2BE2).withOpacity(0.2),
+                                              child: const Center(
+                                                child: CircularProgressIndicator(
+                                                  strokeWidth: 2,
+                                                  color: const Color(0xFF8A2BE2),
+                                                ),
+                                              ),
+                                            );
+                                          },
+                                          errorBuilder: (context, error, stackTrace) {
+                                            return Center(
+                                              child: Text(
+                                                otherUserName.isNotEmpty
+                                                    ? otherUserName[0].toUpperCase()
+                                                    : 'K',
+                                                style: const TextStyle(
+                                                  fontWeight: FontWeight.w600,
+                                                  fontSize: 18,
+                                                  color: const Color(0xFF8A2BE2),
+                                                ),
+                                              ),
+                                            );
+                                          },
+                                        )
+                                      : Center(
                                           child: Text(
-                                            otherUserName.isNotEmpty 
+                                            otherUserName.isNotEmpty
                                                 ? otherUserName[0].toUpperCase()
                                                 : 'K',
                                             style: const TextStyle(
                                               fontWeight: FontWeight.w600,
                                               fontSize: 18,
-                                              color: const Color(0xFF8A2BE2),
+                                              color: Colors.green,
                                             ),
                                           ),
-                                        );
-                                      },
-                                    )
-                                  : Center(
-                                      child: Text(
-                                        otherUserName.isNotEmpty 
-                                            ? otherUserName[0].toUpperCase()
-                                            : 'K',
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.w600,
-                                          fontSize: 18,
-                                          color: Colors.green,
                                         ),
-                                      ),
+                                ),
+                              );
+                            },
+                          ),
+                          Positioned(
+                            right: 0,
+                            bottom: 0,
+                            child: StreamBuilder<bool>(
+                              stream: _userStatusService.getUserOnlineStatus(otherUserId),
+                              builder: (context, snapshot) {
+                                final isOnline = snapshot.data ?? false;
+                                return Container(
+                                  width: 14,
+                                  height: 14,
+                                  decoration: BoxDecoration(
+                                    color: isOnline ? const Color(0xFF8A2BE2) : const Color(0xFFFFFFFF).withOpacity(0.5),
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: Colors.white,
+                                      width: 2,
                                     ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                      title: FutureBuilder<String>(
+                        future: _getUserName(otherUserId),
+                        builder: (context, snapshot) {
+                          final displayName = snapshot.data ?? otherUserName;
+                          return Text(
+                            displayName,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 16,
+                              color: Color(0xFFFFFFFF),
                             ),
                           );
                         },
                       ),
-                      // Çevrimiçi durumu göstergesi
-                      Positioned(
-                        right: 0,
-                        bottom: 0,
-                        child: StreamBuilder<bool>(
-                          stream: _userStatusService.getUserOnlineStatus(otherUserId),
-                          builder: (context, snapshot) {
-                            final isOnline = snapshot.data ?? false;
-                            return Container(
-                              width: 14,
-                              height: 14,
-                              decoration: BoxDecoration(
-                                color: isOnline ? const Color(0xFF8A2BE2) : const Color(0xFFFFFFFF).withOpacity(0.5),
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: Colors.white,
-                                  width: 2,
-                                ),
-                              ),
-                            );
-                          },
+                      subtitle: Text(
+                        lastMessage.isNotEmpty ? lastMessage : 'Henüz mesaj yok',
+                        style: TextStyle(
+                          color: const Color(0xFFFFFFFF).withOpacity(0.7),
+                          fontSize: 14,
                         ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                    ],
-                  ),
-                  title: FutureBuilder<String>(
-                    future: _getUserName(otherUserId),
-                    builder: (context, snapshot) {
-                      final displayName = snapshot.data ?? otherUserName;
-                      return Text(
-                        displayName,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 16,
-                          color: Color(0xFFFFFFFF),
-                        ),
-                      );
-                    },
-                  ),
-                  subtitle: Text(
-                    lastMessage.isNotEmpty ? lastMessage : 'Henüz mesaj yok',
-                    style: TextStyle(
-                      color: const Color(0xFFFFFFFF).withOpacity(0.7),
-                      fontSize: 14,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  trailing: StreamBuilder<int>(
-                    stream: UnreadMessageService.getUnreadCountStream(chatId, currentUserId),
-                    builder: (context, snapshot) {
-                      final unreadCount = snapshot.data ?? 0;
-                      
-                      return Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (unreadCount > 0) ...[
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFFF3B30),
-                                borderRadius: BorderRadius.circular(12),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: const Color(0xFFFF3B30).withOpacity(0.5),
-                                    blurRadius: 4,
-                                    offset: const Offset(0, 1),
+                      trailing: StreamBuilder<int>(
+                        stream: UnreadMessageService.getUnreadCountStream(chatId, currentUserId),
+                        builder: (context, snapshot) {
+                          final unreadCount = snapshot.data ?? 0;
+
+                          return Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (unreadCount > 0) ...[
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFFF3B30),
+                                    borderRadius: BorderRadius.circular(12),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: const Color(0xFFFF3B30).withOpacity(0.5),
+                                        blurRadius: 4,
+                                        offset: const Offset(0, 1),
+                                      ),
+                                    ],
                                   ),
-                                ],
-                              ),
-                              child: Text(
-                                unreadCount > 99 ? '99+' : unreadCount.toString(),
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
+                                  child: Text(
+                                    unreadCount > 99 ? '99+' : unreadCount.toString(),
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
                                 ),
+                                const SizedBox(width: 8),
+                              ],
+                              if (lastMessageTime != null)
+                                Text(
+                                  _getTimeAgo(lastMessageTime.toDate()),
+                                  style: TextStyle(
+                                    color: const Color(0xFFFFFFFF).withOpacity(0.6),
+                                    fontSize: 12,
+                                  ),
+                                )
+                              else
+                                Text(
+                                  'Yeni',
+                                  style: TextStyle(
+                                    color: const Color(0xFF8A2BE2),
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                            ],
+                          );
+                        },
+                      ),
+                      onTap: () {
+                        if (otherUserId.isNotEmpty) {
+                          if (widget.onChatOpened != null) {
+                            print('DEBUG: MessagePage: Chat $chatId için callback çağrılıyor');
+                            widget.onChatOpened!(chatId);
+                          } else {
+                            print('DEBUG: MessagePage: onChatOpened callback null!');
+                          }
+
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => ChatPage(
+                                otherUserId: otherUserId,
+                                otherUserName: otherUserName,
                               ),
                             ),
-                            const SizedBox(width: 8),
-                          ],
-                          if (lastMessageTime != null)
-                            Text(
-                              _getTimeAgo(lastMessageTime.toDate()),
-                              style: TextStyle(
-                                color: const Color(0xFFFFFFFF).withOpacity(0.6),
-                                fontSize: 12,
-                              ),
-                            )
-                          else
-                            Text(
-                              'Yeni',
-                              style: TextStyle(
-                                color: const Color(0xFF8A2BE2),
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                        ],
-                      );
-                    },
-                  ),
-                  onTap: () {
-                    if (otherUserId.isNotEmpty) {
-                      // Chat'e girildiğinde callback'i çağır
-                      if (widget.onChatOpened != null) {
-                        print('DEBUG: MessagePage: Chat $chatId için callback çağrılıyor');
-                        widget.onChatOpened!(chatId);
-                      } else {
-                        print('DEBUG: MessagePage: onChatOpened callback null!');
-                      }
-                      
-                      // Bu chat'i okunmuş olarak işaretle (HomePage'deki callback ile)
-                      // _readChats artık HomePage'den geliyor, burada setState gerekmiyor
-                      
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => ChatPage(
-                            otherUserId: otherUserId,
-                            otherUserName: otherUserName,
-                          ),
-                        ),
-                      );
-                    }
-                  },
-                ),
+                          );
+                        }
+                      },
+                    ),
+                  );
+                },
               );
             },
           );
@@ -471,7 +562,7 @@ class _MessagePageState extends State<MessagePage> {
   String _getTimeAgo(DateTime dateTime) {
     final now = DateTime.now();
     final difference = now.difference(dateTime);
-    
+
     if (difference.inDays > 0) {
       return '${difference.inDays}g';
     } else if (difference.inHours > 0) {

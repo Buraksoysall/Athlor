@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:async';
 import 'profile_page.dart';
 
 class LeaderboardPage extends StatefulWidget {
@@ -16,11 +17,41 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
   final scaffoldKey = GlobalKey<ScaffoldState>();
   List<Map<String, dynamic>> topUsers = [];
   bool isLoading = true;
+  StreamSubscription? _likesListener;
+  Timer? _debounceTimer;
 
   @override
   void initState() {
     super.initState();
     _fetchTopUsers();
+    _startLikesListener();
+  }
+
+  @override
+  void dispose() {
+    _likesListener?.cancel();
+    _debounceTimer?.cancel();
+    super.dispose();
+  }
+
+  // Likes koleksiyonunu dinle ve değişiklik olduğunda leaderboard'ı güncelle
+  void _startLikesListener() {
+    final now = DateTime.now();
+    final monthStart = DateTime(now.year, now.month, 1);
+    final monthStartTimestamp = Timestamp.fromDate(monthStart);
+    
+    _likesListener = FirebaseFirestore.instance
+        .collection('likes')
+        .where('createdAt', isGreaterThanOrEqualTo: monthStartTimestamp)
+        .snapshots()
+        .listen((snapshot) {
+      // Debounce ile çok sık güncellemeyi önle
+      _debounceTimer?.cancel();
+      _debounceTimer = Timer(const Duration(seconds: 2), () {
+        print('🔄 Like değişikliği tespit edildi, leaderboard güncelleniyor...');
+        _fetchTopUsers();
+      });
+    });
   }
 
 
@@ -38,6 +69,9 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
       
       // Önce mevcut likes alanlarını güncelle
       await _updateAllUserLikes();
+      
+      // Kullanıcı verileri güncellendikten sonra tekrar çek
+      await Future.delayed(const Duration(milliseconds: 500));
       
       // Users koleksiyonundaki güncel likes verilerini kullan (SADECE BU AYIN)
       final now = DateTime.now();
@@ -82,7 +116,7 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
            'changePercent': changePercent,
          };
          
-         print('Kullanıcı $userId: $currentLikes beğeni ($currentXP XP) (Geçen ay: $lastMonthLikes beğeni, $lastMonthXP XP, Değişim: ${changePercent.toStringAsFixed(1)}%)');
+         print('🏆 Kullanıcı $userId: $currentLikes beğeni ($currentXP XP) (Geçen ay: $lastMonthLikes beğeni, $lastMonthXP XP, Değişim: ${changePercent.toStringAsFixed(1)}%)');
       }
 
       // Tüm kullanıcıları XP'ye göre sırala
@@ -184,7 +218,13 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
         }
       }
       
-      print('Bu ayın filtrelenmiş like sayısı: $thisMonthLikes (${_getMonthName(currentMonth)} ${currentYear})');
+      print('🔢 Bu ayın toplam like sayısı: $thisMonthLikes (${_getMonthName(currentMonth)} ${currentYear})');
+      print('📋 Aktivite like dağılımı:');
+      activityLikeCounts.forEach((activityId, count) {
+        if (count > 0) {
+          print('   📌 Aktivite $activityId: $count like');
+        }
+      });
       
       // Tüm kullanıcıları çek
       QuerySnapshot usersSnapshot = await FirebaseFirestore.instance
@@ -208,13 +248,35 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
         }
         
         int totalLikes = 0;
+        List<String> userActivityMatches = [];
+        
         for (String activityId in myJoinedActivities) {
-          totalLikes += activityLikeCounts[activityId] ?? 0;
+          int activityLikes = activityLikeCounts[activityId] ?? 0;
+          totalLikes += activityLikes;
+          if (activityLikes > 0) {
+            userActivityMatches.add('$activityId:$activityLikes');
+          }
+        }
+        
+        if (totalLikes > 0) {
+          print('👤 Kullanıcı $userId: ${userActivityMatches.join(", ")} = $totalLikes toplam like');
         }
         
         // Kullanıcının likes alanını güncelle
         await _updateUserLikes(userId, totalLikes);
       }
+      
+      // Eşleşmeyen like'ları kontrol et
+      int assignedLikes = 0;
+      activityLikeCounts.forEach((activityId, count) {
+        assignedLikes += count;
+      });
+      
+      print('📊 Özet: $thisMonthLikes toplam like, $assignedLikes kullanıcılara atandı');
+      if (thisMonthLikes != assignedLikes) {
+        print('⚠️  ${thisMonthLikes - assignedLikes} like eşleşmedi!');
+      }
+      
     } catch (e) {
       print('Tüm kullanıcıların likes güncelleme hatası: $e');
     }
@@ -251,7 +313,7 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
           'currentMonthKey': monthKey,
         });
         
-        print('Kullanıcı $userId bu ayın likes güncellendi: $likesCount (${_getMonthName(currentMonth)} $currentYear)');
+        // Kullanıcı likes güncellendi
       }
     } catch (e) {
       print('Kullanıcı $userId likes güncelleme hatası: $e');
@@ -452,110 +514,32 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
                   child: Padding(
                     padding: const EdgeInsets.all(16),
                     child: Column(
-                      mainAxisSize: MainAxisSize.max,
-                      children: [
-                        Row(
-                          mainAxisSize: MainAxisSize.max,
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              '🏆 Leaderboard',
-                              style: GoogleFonts.interTight(
-                                fontWeight: FontWeight.bold,
-                                color: const Color(0xFFFFFFFF),
-                                fontSize: 24,
-                                letterSpacing: 0.0,
-                              ),
+                    mainAxisSize: MainAxisSize.max,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                        Center(
+                          child: Text(
+                            '🏆 Leaderboard',
+                            style: GoogleFonts.interTight(
+                              fontWeight: FontWeight.bold,
+                              color: const Color(0xFFFFFFFF),
+                              fontSize: 24,
+                              letterSpacing: 0.0,
                             ),
-                            GestureDetector(
-                              onTap: () {
-                                setState(() {
-                                  isLoading = true;
-                                });
-                                _fetchTopUsers();
-                              },
-                              child: Container(
-                                width: 40,
-                                height: 40,
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF007AFF).withOpacity(0.2),
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                    color: const Color(0xFF007AFF).withOpacity(0.4),
-                                    width: 1,
-                                  ),
-                                ),
-                                child: const Icon(
-                                  Icons.refresh_rounded,
-                                  color: Color(0xFFFFFFFF),
-                                  size: 20,
-                                ),
-                              ),
-                            ),
-                          ],
+                          ),
                         ),
                         const SizedBox(height: 16),
-                         Text(
-                           'Bu Ayın En İyi 10 Kullanıcısı',
-                           style: GoogleFonts.inter(
-                             color: const Color(0xFFFFFFFF).withOpacity(0.9),
-                             fontSize: 16,
-                             letterSpacing: 0.0,
-                           ),
-                         ),
-                        const SizedBox(height: 12),
-                        // Sezon bilgisi ve açıklama
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                          decoration: BoxDecoration(
-                            gradient: const LinearGradient(
-                              colors: [Color(0xFF007AFF), Color(0xFF0056CC)],
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                            ),
-                            borderRadius: BorderRadius.circular(12),
-                            boxShadow: [
-                              BoxShadow(
-                                color: const Color(0xFF007AFF).withOpacity(0.3),
-                                blurRadius: 8,
-                                offset: const Offset(0, 2),
-                              ),
-                            ],
-                          ),
-                          child: Column(
-                            children: [
-                              Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const Icon(
-                                    Icons.calendar_today,
-                                    color: Colors.white,
-                                    size: 16,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    '${DateTime.now().year} Yılı ${_getMonthName(DateTime.now().month)} Sezonu',
-                                    style: GoogleFonts.inter(
-                                      color: Colors.white,
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w600,
-                                      letterSpacing: 0.0,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                'Her ay başında sıfırlanan yarış sistemi',
-                                style: GoogleFonts.inter(
-                                  color: Colors.white.withOpacity(0.8),
-                                  fontSize: 12,
-                                  letterSpacing: 0.0,
-                                ),
-                              ),
-                            ],
+                        Text(
+                          'Bu ayın en iyi performans gösteren 10 kullanıcısı',
+                          textAlign: TextAlign.center,
+                          style: GoogleFonts.inter(
+                            color: const Color(0xFFFFFFFF).withOpacity(0.9),
+                            fontSize: 16,
+                            letterSpacing: 0.0,
                           ),
                         ),
+                        const SizedBox(height: 12),
+                        // Sezon bilgisi bölümü kaldırıldı
                       ],
                     ),
                   ),

@@ -156,7 +156,35 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             
             const SizedBox(height: 32),
-            
+
+            // Yönetim (yalnızca admin)
+            StreamBuilder<DocumentSnapshot>(
+              stream: FirebaseFirestore.instance
+                  .collection('users')
+                  .doc(FirebaseAuth.instance.currentUser?.uid)
+                  .snapshots(),
+              builder: (context, snapshot) {
+                if (!snapshot.hasData) return const SizedBox.shrink();
+                final data = snapshot.data!.data() as Map<String, dynamic>?;
+                final isAdmin = data != null && (data['isAdmin'] == true);
+                if (!isAdmin) return const SizedBox.shrink();
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildSectionTitle('Yönetim'),
+                    const SizedBox(height: 16),
+                    _buildSettingsItem(
+                      icon: Icons.admin_panel_settings,
+                      title: 'Moderasyon Paneli',
+                      subtitle: 'Raporları görüntüle ve işlem yap',
+                      onTap: () => Navigator.pushNamed(context, '/admin_moderation'),
+                    ),
+                    const SizedBox(height: 32),
+                  ],
+                );
+              },
+            ),
+
             // Tehlikeli Bölge
             _buildSectionTitle('Tehlikeli Bölge'),
             const SizedBox(height: 16),

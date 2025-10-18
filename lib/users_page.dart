@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'chat_page.dart';
+import 'block_service.dart';
 
 class UsersPage extends StatefulWidget {
   const UsersPage({super.key});
@@ -19,6 +20,37 @@ class _UsersPageState extends State<UsersPage> {
   void dispose() {
     _searchController.dispose();
     super.dispose();
+  }
+
+  // Engellenen kullanıcıları filtrele
+  Future<List<QueryDocumentSnapshot>> _getFilteredUsers(List<QueryDocumentSnapshot> userDocs) async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return [];
+    
+    List<QueryDocumentSnapshot> filteredUsers = [];
+    
+    for (final doc in userDocs) {
+      final userData = doc.data() as Map<String, dynamic>;
+      final userName = userData['displayName']?.toString().toLowerCase() ?? '';
+      final username = userData['username']?.toString().toLowerCase() ?? '';
+      final userId = userData['uid']?.toString() ?? '';
+      
+      // Mevcut kullanıcıyı listeden çıkar
+      if (userId == currentUser.uid) continue;
+      
+      // Arama filtresi
+      if (!userName.contains(_searchQuery) && !username.contains(_searchQuery)) {
+        continue;
+      }
+      
+      // Engel kontrolü yap
+      final isBlocked = await BlockService.isBlocked(currentUser.uid, userId);
+      if (!isBlocked) {
+        filteredUsers.add(doc);
+      }
+    }
+    
+    return filteredUsers;
   }
 
   // Kullanıcı profil fotoğrafını al
@@ -200,21 +232,18 @@ class _UsersPageState extends State<UsersPage> {
                   );
                 }
 
-                // Kullanıcıları filtrele (sadece arama yapıldığında)
-                final currentUser = FirebaseAuth.instance.currentUser;
-                final filteredUsers = snapshot.data!.docs.where((doc) {
-                  final userData = doc.data() as Map<String, dynamic>;
-                  final userName = userData['displayName']?.toString().toLowerCase() ?? '';
-                  final username = userData['username']?.toString().toLowerCase() ?? '';
-                  final userId = userData['uid']?.toString() ?? '';
-                  
-                  // Mevcut kullanıcıyı listeden çıkar
-                  if (userId == currentUser?.uid) return false;
-                  
-                  // Arama filtresi (artık _searchQuery boş olamaz çünkü yukarıda kontrol ettik)
-                  return userName.contains(_searchQuery) || 
-                         username.contains(_searchQuery);
-                }).toList();
+                return FutureBuilder<List<QueryDocumentSnapshot>>(
+                  future: _getFilteredUsers(snapshot.data!.docs),
+                  builder: (context, filteredSnapshot) {
+                    if (filteredSnapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(
+                        child: CircularProgressIndicator(
+                          valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF8A2BE2)),
+                        ),
+                      );
+                    }
+                    
+                    final filteredUsers = filteredSnapshot.data ?? [];
 
                 if (filteredUsers.isEmpty) {
                   return Center(
@@ -400,6 +429,8 @@ class _UsersPageState extends State<UsersPage> {
                         ),
                       ),
                     );
+                  },
+                );
                   },
                 );
               },

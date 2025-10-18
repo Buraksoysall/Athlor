@@ -4,6 +4,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'profile_page.dart';
+import 'content_moderation_service.dart';
+import 'report_service.dart';
+import 'block_service.dart';
 
 class CommentsPage extends StatefulWidget {
   final String activityId;
@@ -67,23 +70,48 @@ class _CommentsPageState extends State<CommentsPage> {
   // Yorumları yükle
   Future<void> _loadComments() async {
     try {
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) return;
+      
       final snapshot = await FirebaseFirestore.instance
           .collection('comments')
           .where('activityId', isEqualTo: widget.activityId)
           .orderBy('createdAt', descending: false)
           .get();
 
-      setState(() {
-        _comments = snapshot.docs.map((doc) {
-          final data = doc.data();
-          return {
+      // Engellenen kullanıcıları filtrele
+      List<Map<String, dynamic>> filteredComments = [];
+      
+      for (final doc in snapshot.docs) {
+        final data = doc.data();
+        final commentUserId = data['userId'] as String?;
+        
+        if (commentUserId == null || commentUserId == currentUser.uid) {
+          // Kendi yorumları her zaman göster
+          filteredComments.add({
             'id': doc.id,
             'text': data['text'],
             'userId': data['userId'],
             'userName': data['userName'],
             'createdAt': data['createdAt'],
-          };
-        }).toList();
+          });
+        } else {
+          // Diğer kullanıcıların yorumları için engel kontrolü yap
+          final isBlocked = await BlockService.isBlocked(currentUser.uid, commentUserId);
+          if (!isBlocked) {
+            filteredComments.add({
+              'id': doc.id,
+              'text': data['text'],
+              'userId': data['userId'],
+              'userName': data['userName'],
+              'createdAt': data['createdAt'],
+            });
+          }
+        }
+      }
+
+      setState(() {
+        _comments = filteredComments;
         _isLoading = false;
       });
 
@@ -113,13 +141,30 @@ class _CommentsPageState extends State<CommentsPage> {
     });
 
     try {
+      // Content filtering
+      final text = _commentController.text.trim();
+      if (ContentModerationService.isObjectionable(text)) {
+        await ContentModerationService.logBlockedSubmission(
+          userId: user.uid,
+          contentType: 'comment',
+          content: text,
+        );
+        final kw = ContentModerationService.findFirstMatch(text);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Uygunsuz içerik tespit edildi${kw != null ? ' ("$kw")' : ''}. Gönderilemedi.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
       final userName = user.displayName ?? user.email?.split('@')[0] ?? 'Kullanıcı';
       
       await FirebaseFirestore.instance.collection('comments').add({
         'activityId': widget.activityId,
         'userId': user.uid,
         'userName': userName,
-        'text': _commentController.text.trim(),
+        'text': text,
         'createdAt': FieldValue.serverTimestamp(),
       });
 
@@ -734,6 +779,43 @@ class _CommentsPageState extends State<CommentsPage> {
                         ),
                       ),
                     ),
+                    const Spacer(),
+                    PopupMenuButton<String>(
+                      onSelected: (value) async {
+                        if (value == 'report') {
+                          final reason = await _promptReason();
+                          final current = FirebaseAuth.instance.currentUser;
+                          if (reason != null && current != null) {
+                            await ReportService.reportContent(
+                              reporterId: current.uid,
+                              contentId: comment['id'] ?? '',
+                              contentType: 'comment',
+                              reason: reason,
+                              metadata: {
+                                'activityId': widget.activityId,
+                                'commentUserId': userId ?? '',
+                              },
+                            );
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Rapor gönderildi'), backgroundColor: Colors.orange),
+                              );
+                            }
+                          }
+                        } else if (value == 'block' && userId != null) {
+                          await BlockService.blockUser(userId);
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Kullanıcı engellendi'), backgroundColor: Colors.red),
+                            );
+                          }
+                        }
+                      },
+                      itemBuilder: (context) => [
+                        const PopupMenuItem(value: 'report', child: Text('İçeriği Rapor Et')),
+                        if (userId != null) const PopupMenuItem(value: 'block', child: Text('Kullanıcıyı Engelle')),
+                      ],
+                    ),
                   ],
                 ),
                 const SizedBox(height: 6),
@@ -749,6 +831,25 @@ class _CommentsPageState extends State<CommentsPage> {
               ],
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  Future<String?> _promptReason() async {
+    final controller = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Rapor Sebebi'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(hintText: 'Kısa açıklama'),
+          maxLines: 3,
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('İptal')),
+          TextButton(onPressed: () => Navigator.pop(context, controller.text.trim()), child: const Text('Gönder')),
         ],
       ),
     );

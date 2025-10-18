@@ -5,6 +5,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'profile_page.dart';
 import 'user_status_service.dart';
 import 'unread_message_service.dart';
+import 'content_moderation_service.dart';
+import 'report_service.dart';
+import 'block_service.dart';
 
 class ChatPage extends StatefulWidget {
   final String otherUserId;
@@ -30,6 +33,33 @@ class _ChatPageState extends State<ChatPage> {
   @override
   void initState() {
     super.initState();
+    _checkIfBlocked();
+  }
+  
+  // Engellenen kullanıcı kontrolü
+  Future<void> _checkIfBlocked() async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) {
+      Navigator.pop(context);
+      return;
+    }
+    
+    final isBlocked = await BlockService.isBlocked(currentUser.uid, widget.otherUserId);
+    if (isBlocked) {
+      // Engellenen kullanıcı ile sohbet açılamaz
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Bu kullanıcı ile sohbet edemezsiniz.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        Navigator.pop(context);
+      }
+      return;
+    }
+    
+    // Engellenmemişse normal akışa devam et
     _createOrGetChatId();
     _markChatAsRead();
     _loadOtherUserName();
@@ -199,6 +229,38 @@ class _ChatPageState extends State<ChatPage> {
     if (user == null) return;
 
     try {
+      // Chat blocked kontrolü
+      final chatDoc = await FirebaseFirestore.instance.collection('chats').doc(_chatId).get();
+      if (chatDoc.exists && (chatDoc.data()?['blocked'] == true)) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Bu sohbet engellenmiştir. Mesaj gönderilemez.'),
+              backgroundColor: Color(0xFFFF9500),
+            ),
+          );
+        }
+        return;
+      }
+      final text = _messageController.text.trim();
+      // Content filtering for messages
+      if (ContentModerationService.isObjectionable(text)) {
+        await ContentModerationService.logBlockedSubmission(
+          userId: user.uid,
+          contentType: 'message',
+          content: text,
+        );
+        final kw = ContentModerationService.findFirstMatch(text);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Uygunsuz içerik tespit edildi${kw != null ? ' ("$kw")' : ''}. Mesaj gönderilmedi.'),
+              backgroundColor: const Color(0xFFFF3B30),
+            ),
+          );
+        }
+        return;
+      }
       // Kullanıcı adını Firestore'dan al
       String senderName = await _getUserNameFromFirestore(user.uid);
       
@@ -208,7 +270,7 @@ class _ChatPageState extends State<ChatPage> {
           .doc(_chatId)
           .collection('messages')
           .add(UnreadMessageService.createMessageData(
-            text: _messageController.text.trim(),
+            text: text,
             senderId: user.uid,
             senderName: senderName,
           ));
@@ -279,7 +341,43 @@ class _ChatPageState extends State<ChatPage> {
             ),
           ),
         ),
-        actions: [],
+        actions: [
+          PopupMenuButton<String>(
+            onSelected: (value) async {
+              final current = FirebaseAuth.instance.currentUser;
+              if (current == null) return;
+              if (value == 'report') {
+                // Report the chat/user
+                await ReportService.reportContent(
+                  reporterId: current.uid,
+                  contentId: widget.otherUserId,
+                  contentType: 'user',
+                  reason: 'Uygunsuz davranış/mesaj',
+                  metadata: {
+                    'chatId': _chatId ?? '',
+                  },
+                );
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Rapor gönderildi'), backgroundColor: Colors.orange),
+                  );
+                }
+              } else if (value == 'block') {
+                await BlockService.blockUser(widget.otherUserId);
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Kullanıcı engellendi'), backgroundColor: Colors.red),
+                  );
+                }
+              }
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem(value: 'report', child: Text('Kullanıcıyı Rapor Et')),
+              PopupMenuItem(value: 'block', child: Text('Kullanıcıyı Engelle')),
+            ],
+          ),
+          const SizedBox(width: 8),
+        ],
         centerTitle: false,
         elevation: 0,
         title: GestureDetector(
